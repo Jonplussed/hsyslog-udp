@@ -1,19 +1,37 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+{- |
+  A convenient interface for logging to syslog via UDP.
+
+  The following features are currently missing (but may be provided in future
+  versions):
+
+    * validation of string identifiers such as @APP-NAME@ or @MSGID@
+    * support for @STRUCTURED-DATA@
+    * verification that a UDP packet was fully transmitted
+-}
+
 module System.Posix.Syslog.UDP
-  ( -- * Marshaled Data Types
+  ( -- * Syslog UDP packet component datatypes
+    -- ** Universal to syslog
     L.Priority (..)
-  , L.toPriority
-  , L.fromPriority
   , L.Facility (..)
-  , L.toFacility
-  , L.fromFacility
-    -- * Configuring syslog
-  , SyslogConfig (..)
+    -- ** Newtypes for various string identifiers
+    -- | Refer to
+    -- <https://tools.ietf.org/html/rfc5424#section-6.2 RFC 5424 section 6.2>
+    -- as to the purpose of each.
+  , AppName (..)
+  , HostName (..)
+  , ProcessID (..)
+  , MessageID (..)
+  -- ** Structured Data
+  -- | Currently unsupported; a placeholder for future use.
+  , StructuredData (..)
     -- * The easy Haskell API to syslog via UDP
   , withSyslog
+  , SyslogConfig (..)
   , SyslogFn
-    -- * Constructing a syslog UDP packet
+    -- * Manually constructing syslog UDP packets
   , syslogPacket
   ) where
 
@@ -24,85 +42,104 @@ import Data.List (foldl')
 import Data.Monoid ((<>))
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime, getCurrentTime)
-import Data.Time.Format (formatTime, defaultTimeLocale)
+import Data.Time.Format (FormatTime, formatTime, defaultTimeLocale)
 import Foreign.C (CInt)
 import Network.Socket.ByteString (send)
-import System.Posix.Process (getProcessID)
 import System.Posix.Types (CPid (..))
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Text.Encoding as T
 import qualified Network.Socket as S
 import qualified Network.HostName as H
+import qualified System.Posix.Process as P
 import qualified System.Posix.Syslog as L
 
 newtype AppName = AppName ByteString deriving (Eq, Show)
 newtype HostName = HostName ByteString deriving (Eq, Show)
+newtype ProcessID = ProcessID ByteString deriving (Eq, Show)
 newtype MessageID = MessageID ByteString deriving (Eq, Show)
 
-data StructuredData = StructuredData -- currently unsupported
+data StructuredData = StructuredData
 
-data SyslogConfig = SyslogConfig
-  { udpSockAddr :: S.SockAddr
-  , appName     :: ByteString   -- ^ string appended to each log message
-  } deriving (Eq, Show)
+-- | Wrap an IO computation with the ability to log to syslog via UDP. This
+-- handles opening and closing the syslog socket and provides much of the
+-- information desired in the syslog packet.
+--
+-- > {-# LANGUAGE OverloadedStrings #-}
+-- >
+-- > import System.Posix.Syslog.UDP
+-- >
+-- > main = withSyslog mySyslogConfig $
+-- >   \syslog -> do
+-- >     putStrLn "huhu"
+-- >     syslog (MessageID "general") [USER] [Debug] "huhu"
 
 withSyslog :: SyslogConfig -> (SyslogFn -> IO ()) -> IO ()
 withSyslog config f = do
-    sock <- S.socket (familyFromAddr addr) S.Datagram S.defaultProtocol
-    host <- getHostName
-    proc <- getProcessID
+    socket <- S.socket (familyFromAddr address) S.Datagram S.defaultProtocol
+    hostName <- getHostName
+    processId <- getProcessId
 
-    bracket_ (S.connect sock addr) (S.close sock) $
-      f $ \mid facs pris msg -> do
-        now <- getCurrentTime
-        send sock $ syslogPacket facs pris (Just now) (Just host) (Just app)
-          (Just proc) (Just mid) Nothing msg
+    bracket_ (S.connect socket address) (S.close socket) $
+      f $ \messageId facilities priorities message -> do
+        time <- getCurrentTime
+        _ <- send socket $ syslogPacket facilities priorities (Just time)
+          (Just hostName) (Just $ appName config) (Just processId)
+          (Just messageId) Nothing message
         return ()
   where
-    app = AppName $ appName config
-    addr = udpSockAddr config
+    address = udpSockAddr config
+
+-- | Configuration options for connecting and logging to your syslog socket.
+
+data SyslogConfig = SyslogConfig
+  { udpSockAddr :: S.SockAddr -- ^ where to send the syslog packets
+  , appName     :: AppName    -- ^ string appended to each log message
+  } deriving (Eq, Show)
+
+-- | The type of function provided by 'withSyslog'.
 
 type SyslogFn
-  =  MessageID
-  -> [L.Facility]
-  -> [L.Priority]
-  -> Text
+  =  MessageID    -- ^ arbitrary message classifier
+  -> [L.Facility] -- ^ facilities to log to
+  -> [L.Priority] -- ^ severities under which to log
+  -> Text         -- ^ message body
   -> IO ()
 
--- | Dictated by <https://tools.ietf.org/html/rfc5424 RFC 5424>.
-
-nilValue :: ByteString
-nilValue = "-"
+-- | If 'withSyslog' is too rigid for your application's constraints,
+-- 'syslogPacket' at least provides you the ability to create syslog UDP
+-- packets as dictated by <https://tools.ietf.org/html/rfc5424 RFC 5424>.
 
 syslogPacket
-  :: [L.Facility]
-  -> [L.Priority]
-  -> Maybe UTCTime
-  -> Maybe HostName
-  -> Maybe AppName
-  -> Maybe CPid
-  -> Maybe MessageID
-  -> Maybe StructuredData
-  -> Text
+  :: FormatTime t
+  => [L.Facility]         -- ^ facilities in @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@
+  -> [L.Priority]         -- ^ severities in @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@
+  -> Maybe t              -- ^ time of message, converted to @<https://tools.ietf.org/html/rfc5424#section-6.2.3 TIMESTAMP>@
+  -> Maybe HostName       -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@
+  -> Maybe AppName        -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
+  -> Maybe ProcessID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@
+  -> Maybe MessageID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.7 MSGID>@
+  -> Maybe StructuredData -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.3 STRUCTURED-DATA>@ (unsupported)
+  -> Text                 -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
   -> ByteString
-syslogPacket facs pris time host app pid mid _ msg =
-         prival             -- 6.2.1 PRI
-    <>   version            -- 6.2.2 VERSION
-    `sp` orNil mkTime time  -- 6.2.3 TIMESTAMP
-    `sp` orNil mkHost host  -- 6.2.4 HOSTNAME
-    `sp` orNil mkApp app    -- 6.2.5 APP-NAME
-    `sp` orNil mkProcId pid -- 6.2.6 PROCID
-    `sp` orNil mkMsgId mid  -- 6.2.7 MSGID
-    `sp` structData         -- 6.3
-    `sp` T.encodeUtf8 msg   -- 6.4   MSG
+syslogPacket facilities priorities time hostName appName' processId messageId _
+  message =
+         prival
+    <>   version
+    `sp` orNil mkTime time
+    `sp` orNil mkHost hostName
+    `sp` orNil mkApp appName'
+    `sp` orNil mkProcId processId
+    `sp` orNil mkMsgId messageId
+    `sp` structData
+    `sp` T.encodeUtf8 message
   where
-    prival = "<" <> B.pack (show $ mkPriVal facs pris) <> ">"
+    prival = "<" <> B.pack (show $ mkPriVal facilities priorities) <> ">"
     version = "1"
     mkTime = B.pack . formatTime defaultTimeLocale "%FT%X%QZ"
     mkHost (HostName x) = notEmpty x
     mkApp (AppName x) = notEmpty x
-    mkProcId (CPid x) = B.pack $ show x
+    mkProcId (ProcessID x) = notEmpty x
     mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
@@ -115,15 +152,24 @@ familyFromAddr :: S.SockAddr -> S.Family
 familyFromAddr (S.SockAddrInet _ _) = S.AF_INET
 familyFromAddr (S.SockAddrInet6 _ _ _ _) = S.AF_INET6
 familyFromAddr (S.SockAddrUnix _) = S.AF_UNIX
+familyFromAddr (S.SockAddrCan _) = S.AF_CAN
 
 getHostName :: IO HostName
 getHostName = HostName . B.pack <$> H.getHostName
+
+getProcessId :: IO ProcessID
+getProcessId = do
+    (CPid pid) <- P.getProcessID
+    return . ProcessID . B.pack $ show pid
 
 mkPriVal :: [L.Facility] -> [L.Priority] -> CInt
 mkPriVal facs pris =
     L._LOG_MAKEPRI
       (bitsOrWith L.fromFacility facs)
       (bitsOrWith L.fromPriority pris)
+
+nilValue :: ByteString
+nilValue = "-"
 
 notEmpty :: ByteString -> ByteString
 notEmpty bs = if B.null bs then nilValue else bs
