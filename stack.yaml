@@ -1,0 +1,10 @@
+resolver: lts-5.18
+extra-deps: []
+flags: {}
+extra-package-dbs: []
+
+packages:
+- '.'
+- location:
+    git: https://github.com/ThoughtLeadr/hsyslog
+    commit: 0740ebc30fb66eec5f0c3879c1a320794eb1001a
