@@ -29,8 +29,10 @@ module System.Posix.Syslog.UDP
   , StructuredData (..)
     -- * The easy Haskell API to syslog via UDP
   , withSyslog
-  , SyslogConfig (..)
   , SyslogFn
+  , SyslogConfig (..)
+  , defaultConfig
+  , S.SockAddr (..)
     -- * Manually constructing syslog UDP packets
   , syslogPacket
   ) where
@@ -41,7 +43,7 @@ import Data.ByteString (ByteString)
 import Data.List (foldl')
 import Data.Monoid ((<>))
 import Data.Text (Text)
-import Data.Time.Clock (UTCTime, getCurrentTime)
+import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (FormatTime, formatTime, defaultTimeLocale)
 import Foreign.C (CInt)
 import Network.Socket.ByteString (send)
@@ -96,6 +98,15 @@ data SyslogConfig = SyslogConfig
   { udpSockAddr :: S.SockAddr -- ^ where to send the syslog packets
   , appName     :: AppName    -- ^ string appended to each log message
   } deriving (Eq, Show)
+
+-- | A convenient default config for local use, connecting on @127.0.0.1:514@.
+
+defaultConfig :: SyslogConfig
+defaultConfig =
+    SyslogConfig
+      { udpSockAddr = S.SockAddrInet 514 2130706433
+      , appName = AppName "hsyslog-udp"
+      }
 
 -- | The type of function provided by 'withSyslog'.
 

@@ -14,7 +14,7 @@ cabal-version:          >= 1.10
 library
   default-language:     Haskell2010
   hs-source-dirs:       src
-  ghc-options:          -Wall -Werror
+  ghc-options:          -Wall
   exposed-modules:      System.Posix.Syslog.UDP
 
   Build-Depends:        base >= 3 && < 5
@@ -29,9 +29,11 @@ library
 test-suite specs
   default-language:     Haskell2010
   hs-source-dirs:       test
-  main-is:              Main.hs
+  main-is:              Spec.hs
   type:                 exitcode-stdio-1.0
+  other-modules:        System.Posix.Syslog.UDPSpec
 
   Build-Depends:        base >= 3 && < 5
                       , hspec == 2.2.*
                       , hsyslog-udp
+                      , time == 1.5.*
