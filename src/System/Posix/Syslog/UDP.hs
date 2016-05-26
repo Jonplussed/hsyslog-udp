@@ -46,12 +46,12 @@ import Data.Text (Text)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (FormatTime, formatTime, defaultTimeLocale)
 import Foreign.C (CInt)
-import Network.Socket.ByteString (send)
 import System.Posix.Types (CPid (..))
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Text.Encoding as T
 import qualified Network.Socket as S
+import qualified Network.Socket.ByteString as SB
 import qualified Network.HostName as H
 import qualified System.Posix.Process as P
 import qualified System.Posix.Syslog as L
@@ -63,9 +63,7 @@ newtype MessageID = MessageID ByteString deriving (Eq, Show)
 
 data StructuredData = StructuredData
 
--- | Wrap an IO computation with the ability to log to syslog via UDP. This
--- handles opening and closing the syslog socket and provides much of the
--- information desired in the syslog packet.
+-- | Wrap an IO computation with the ability to log to syslog via UDP.
 --
 -- > {-# LANGUAGE OverloadedStrings #-}
 -- >
@@ -82,13 +80,13 @@ withSyslog config f = do
     hostName <- getHostName
     processId <- getProcessId
 
-    bracket_ (S.connect socket address) (S.close socket) $
-      f $ \messageId facilities priorities message -> do
-        time <- getCurrentTime
-        _ <- send socket $ syslogPacket facilities priorities (Just time)
-          (Just hostName) (Just $ appName config) (Just processId)
-          (Just messageId) Nothing message
-        return ()
+    let send bytes = SB.sendTo socket bytes address >> return ()
+
+    f $ \messageId facilities priorities message -> do
+      time <- getCurrentTime
+      send $ syslogPacket facilities priorities (Just time) (Just hostName)
+        (Just $ appName config) (Just processId) (Just messageId) Nothing
+        message
   where
     address = udpSockAddr config
 
@@ -104,7 +102,7 @@ data SyslogConfig = SyslogConfig
 defaultConfig :: SyslogConfig
 defaultConfig =
     SyslogConfig
-      { udpSockAddr = S.SockAddrInet 514 2130706433
+      { udpSockAddr = S.SockAddrInet 514 16777343
       , appName = AppName "hsyslog-udp"
       }
 
