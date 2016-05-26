@@ -37,7 +37,8 @@ module System.Posix.Syslog.UDP
   , syslogPacket
   ) where
 
-import Control.Exception (bracket_)
+import Control.Exception (SomeException, catch)
+import Control.Monad (void)
 import Data.Bits (Bits, (.|.))
 import Data.ByteString (ByteString)
 import Data.List (foldl')
@@ -73,6 +74,9 @@ data StructuredData = StructuredData
 -- >   \syslog -> do
 -- >     putStrLn "huhu"
 -- >     syslog (MessageID "general") [USER] [Debug] "huhu"
+--
+-- This makes no assumptions about socket connection status or endpoint
+-- availability. Any errors while sending are silently ignored.
 
 withSyslog :: SyslogConfig -> (SyslogFn -> IO ()) -> IO ()
 withSyslog config f = do
@@ -80,7 +84,9 @@ withSyslog config f = do
     hostName <- getHostName
     processId <- getProcessId
 
-    let send bytes = SB.sendTo socket bytes address >> return ()
+    let send bytes = catch
+          (void $ SB.sendTo socket bytes address)
+          (const $ return () :: SomeException -> IO ())
 
     f $ \messageId facilities priorities message -> do
       time <- getCurrentTime
@@ -93,8 +99,8 @@ withSyslog config f = do
 -- | Configuration options for connecting and logging to your syslog socket.
 
 data SyslogConfig = SyslogConfig
-  { udpSockAddr :: S.SockAddr -- ^ where to send the syslog packets
-  , appName     :: AppName    -- ^ string appended to each log message
+  { appName     :: AppName    -- ^ string appended to each log message
+  , udpSockAddr :: S.SockAddr -- ^ where to send the syslog packets
   } deriving (Eq, Show)
 
 -- | A convenient default config for local use, connecting on @127.0.0.1:514@.
@@ -102,8 +108,8 @@ data SyslogConfig = SyslogConfig
 defaultConfig :: SyslogConfig
 defaultConfig =
     SyslogConfig
-      { udpSockAddr = S.SockAddrInet 514 16777343
-      , appName = AppName "hsyslog-udp"
+      { appName = AppName "hsyslog-udp"
+      , udpSockAddr = S.SockAddrInet 514 16777343
       }
 
 -- | The type of function provided by 'withSyslog'.
