@@ -17,14 +17,20 @@ module System.Posix.Syslog.UDP
     L.Priority (..)
   , L.Facility (..)
   , L.PriorityMask (..)
-    -- ** Newtypes for various string identifiers
+    -- ** Newtypes for various String/Int values
     -- | Refer to
     -- <https://tools.ietf.org/html/rfc5424#section-6.2 RFC 5424 section 6.2>
     -- as to the purpose of each.
   , AppName (..)
   , HostName (..)
+  , PriVal (..)
   , ProcessID (..)
   , MessageID (..)
+    -- ** Type aliases
+    -- | What syslog refers to as 'L.Priority',
+    -- <https://tools.ietf.org/html/rfc5424 RFC 5424> calls 'Severity'.
+  , Severity
+  , SeverityMask
   -- ** Structured Data
   -- | Currently unsupported; a placeholder for future use.
   , StructuredData (..)
@@ -33,14 +39,14 @@ module System.Posix.Syslog.UDP
   , SyslogFn
   , SyslogConfig (..)
   , defaultConfig
-  , S.SockAddr (..)
+  , localhost
     -- * Manually constructing and sending syslog UDP packets
-  , udpSocketForAddr
-  , maskedPriVal
   , syslogPacket
     -- ** Miscellaneous utilities
   , getHostName
   , getProcessId
+  , getSyslogOnHost
+  , maskedPriVal
   ) where
 
 import Control.Exception (SomeException, catch)
@@ -57,18 +63,47 @@ import System.Posix.Types (CPid (..))
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Text.Encoding as T
+import qualified Network.BSD as BSD
 import qualified Network.Socket as S
 import qualified Network.Socket.ByteString as SB
-import qualified Network.HostName as H
 import qualified System.Posix.Process as P
 import qualified System.Posix.Syslog as L
 
-newtype AppName = AppName ByteString deriving (Eq, Show)
-newtype HostName = HostName ByteString deriving (Eq, Show)
-newtype ProcessID = ProcessID ByteString deriving (Eq, Show)
-newtype MessageID = MessageID ByteString deriving (Eq, Show)
+type Severity = L.Priority
+type SeverityMask = L.PriorityMask
 
-data StructuredData = StructuredData
+newtype AppName
+  = AppName ByteString
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
+  deriving (Eq, Show)
+
+newtype HostName
+  = HostName ByteString
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@;
+  -- fetch via 'getHostName'
+  deriving (Eq, Show)
+
+newtype PriVal
+  = PriVal CInt
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@;
+  -- construct via 'maskedPriVal'
+  deriving (Eq, Show)
+
+newtype ProcessID
+  = ProcessID ByteString
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@;
+  -- fetch via 'getProcessId'
+  deriving (Eq, Show)
+
+newtype MessageID
+  = MessageID ByteString
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.7 MSGID>@
+  deriving (Eq, Show)
+
+data StructuredData
+  = StructuredData
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.3 STRUCTURED-DATA>@
+  -- (unsupported)
 
 -- | Wrap an IO computation with the ability to log to syslog via UDP.
 --
@@ -79,103 +114,108 @@ data StructuredData = StructuredData
 -- > main = withSyslog mySyslogConfig $
 -- >   \syslog -> do
 -- >     putStrLn "huhu"
--- >     syslog (MessageID "general") [USER] [Debug] "huhu"
+-- >     syslog [USER] [Debug] "huhu"
 --
 -- This makes no assumptions about socket connection status or endpoint
 -- availability. Any errors while sending are silently ignored.
 
 withSyslog :: SyslogConfig -> (SyslogFn -> IO ()) -> IO ()
-withSyslog config f = do
-    socket <- udpSocketForAddr $ udpSockAddr config
+withSyslog config f = S.withSocketsDo $ do
+    socket <- S.socket (S.addrFamily addr) S.Datagram udpProtocolNum
     hostName <- getHostName
     processId <- getProcessId
 
     let send bytes = catch
-          (void . SB.sendTo socket bytes $ udpSockAddr config)
+          (void . SB.sendTo socket bytes $ S.addrAddress addr)
           (const $ return () :: SomeException -> IO ())
 
-    f $ \messageId facilities priorities message ->
-      case maskedPriVal (priorityMask config) facilities priorities of
+    f $ \facilities priorities message ->
+      case maskedPriVal (severityMask config) facilities priorities of
         Nothing -> return ()
         Just priVal -> do
           time <- getCurrentTime
           send $ syslogPacket priVal (Just time) (Just hostName)
-            (Just $ appName config) (Just processId) (Just messageId) Nothing
+            (Just $ appName config) (Just processId) Nothing Nothing
             message
+  where
+    addr = udpEndpoint config
+
+-- | The type of function provided by 'withSyslog'.
+
+type SyslogFn
+  =  [L.Facility] -- ^ facilities to log to
+  -> [Severity]   -- ^ severities under which to log
+  -> Text         -- ^ message body
+  -> IO ()
 
 -- | Configuration options for connecting and logging to your syslog socket.
 
 data SyslogConfig = SyslogConfig
   { appName :: AppName
     -- ^ string appended to each log message
-  , priorityMask :: L.PriorityMask
+  , severityMask :: SeverityMask
     -- ^ whitelist of priorities of logs to send
-  , udpSockAddr :: S.SockAddr
-    -- ^ where to send the syslog packets
+  , udpEndpoint :: S.AddrInfo
+    -- ^ where to send the syslog packets; find via 'getSyslogOnHost'
+    -- or 'S.getAddrInfo'
   } deriving (Eq, Show)
 
--- | A convenient default config for local use, connecting on @127.0.0.1:514@.
+-- | A convenient default config, connecting to
+-- 'localhost'. Provided for development/testing purposes.
 
 defaultConfig :: SyslogConfig
 defaultConfig =
     SyslogConfig
       { appName = AppName "hsyslog-udp"
-      , priorityMask = L.NoMask
-      , udpSockAddr = S.SockAddrInet 514 16777343
+      , severityMask = L.NoMask
+      , udpEndpoint = localhost
       }
 
--- | The type of function provided by 'withSyslog'.
+-- | The default IPv4 address/port for syslog on a local machine. Provided for
+-- development/testing purposes.
 
-type SyslogFn
-  =  MessageID    -- ^ arbitrary message classifier
-  -> [L.Facility] -- ^ facilities to log to
-  -> [L.Priority] -- ^ severities under which to log
-  -> Text         -- ^ message body
-  -> IO ()
-
--- | Initialize a datagram socket appropriate for your endpoint's address
-
-udpSocketForAddr :: S.SockAddr -> IO S.Socket
-udpSocketForAddr addr =
-    S.socket (familyFromAddr addr) S.Datagram S.defaultProtocol
-
--- | Construct a @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@.
--- 'Nothing' indicates that the priorities are fully masked, and so no packet
--- should be sent.
-
-maskedPriVal
-  :: L.PriorityMask
-  -> [L.Facility]
-  -> [L.Priority]
-  -> Maybe CInt
--- this switching is required because the CInt representation of NoMask is 0
-maskedPriVal _ _ [] = Nothing
-maskedPriVal mask facs pris =
-    case mask of
-      L.NoMask -> Just $ L._LOG_MAKEPRI facVal priVal
-      _ | maskedPriVal == 0 -> Nothing
-      _ -> Just $ L._LOG_MAKEPRI facVal maskedPriVal
-  where
-    facVal = bitsOrWith L.fromFacility facs
-    priVal = bitsOrWith L.fromPriority pris
-    maskedPriVal = L.fromPriorityMask mask .&. priVal
+localhost :: S.AddrInfo
+localhost =
+    S.AddrInfo
+      { S.addrFlags = []
+      , S.addrFamily = S.AF_INET
+      , S.addrSocketType = S.Datagram
+      , S.addrProtocol = udpProtocolNum
+      , S.addrAddress = S.SockAddrInet 514 16777343
+      , S.addrCanonName = Nothing
+      }
 
 -- | Construct a syslog UDP packet as dictated by
--- <https://tools.ietf.org/html/rfc5424 RFC 5424>.
+-- <https://tools.ietf.org/html/rfc5424 RFC 5424>. Note that fields in a syslog
+-- packet are whitespace-delineated, so don't allow whitespace in anything but
+-- the log message!
 
 syslogPacket
   :: FormatTime t
-  => CInt                 -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@; construct via 'maskedPriVal'
-  -> Maybe t              -- ^ time of message, converted to @<https://tools.ietf.org/html/rfc5424#section-6.2.3 TIMESTAMP>@
-  -> Maybe HostName       -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@; fetch via 'getHostName'
-  -> Maybe AppName        -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
-  -> Maybe ProcessID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@; fetch via 'getProcessId'
-  -> Maybe MessageID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.7 MSGID>@
-  -> Maybe StructuredData -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.3 STRUCTURED-DATA>@ (unsupported)
-  -> Text                 -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
+  => PriVal
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@;
+  -- construct via 'maskedPriVal'
+  -> Maybe t
+  -- ^ time of message, converted to
+  -- @<https://tools.ietf.org/html/rfc5424#section-6.2.3 TIMESTAMP>@
+  -> Maybe HostName
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@;
+  -- fetch via 'getHostName'
+  -> Maybe AppName
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
+  -> Maybe ProcessID
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@;
+  -- fetch via 'getProcessId'
+  -> Maybe MessageID
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.7 MSGID>@
+  -> Maybe StructuredData
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.3 STRUCTURED-DATA>@
+  -- (unsupported)
+  -> Text
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
   -> ByteString
 syslogPacket priVal time hostName appName' processId messageId _ message =
-         formatPriVal
+         formatPriVal priVal
     <>   version
     `sp` orNil mkTime time
     `sp` orNil mkHost hostName
@@ -185,7 +225,7 @@ syslogPacket priVal time hostName appName' processId messageId _ message =
     `sp` structData
     `sp` T.encodeUtf8 message
   where
-    formatPriVal = "<" <> B.pack (show priVal) <> ">"
+    formatPriVal (PriVal x) = "<" <> B.pack (show x) <> ">"
     version = "1"
     mkTime = B.pack . formatTime defaultTimeLocale "%FT%X%QZ"
     mkHost (HostName x) = notEmpty x
@@ -195,24 +235,50 @@ syslogPacket priVal time hostName appName' processId messageId _ message =
     structData = nilValue
 
 getHostName :: IO HostName
-getHostName = HostName . B.pack <$> H.getHostName
+getHostName = HostName . B.pack <$> BSD.getHostName
 
 getProcessId :: IO ProcessID
 getProcessId = do
     (CPid pid) <- P.getProcessID
     return . ProcessID . B.pack $ show pid
 
+-- | Return any syslog/UDP identified endpoints at the given hostname or IP
+-- address. You'll have to select from the results.
+
+getSyslogOnHost :: String -> IO [S.AddrInfo]
+getSyslogOnHost hostname =
+    S.getAddrInfo (Just hints) (Just hostname) (Just "syslog")
+  where
+    hints = S.defaultHints
+        { S.addrSocketType = S.Datagram
+        , S.addrProtocol = udpProtocolNum
+        }
+
+-- | Construct a @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@.
+-- 'Nothing' indicates that the severities are fully masked, and so no packet
+-- should be sent.
+
+maskedPriVal
+  :: SeverityMask
+  -> [L.Facility]
+  -> [Severity]
+  -> Maybe PriVal
+-- this switching is required because the CInt representation of NoMask is 0
+maskedPriVal _ _ [] = Nothing
+maskedPriVal mask facs pris =
+    case mask of
+      L.NoMask -> Just . PriVal $ L._LOG_MAKEPRI facVal priVal
+      _ | masked == 0 -> Nothing
+      _ -> Just . PriVal $ L._LOG_MAKEPRI facVal masked
+  where
+    facVal = bitsOrWith L.fromFacility facs
+    priVal = bitsOrWith L.fromPriority pris
+    masked = L.fromPriorityMask mask .&. priVal
+
 -- internal functions
 
 bitsOrWith :: (Bits b, Num b) => (a -> b) -> [a] -> b
 bitsOrWith f = foldl' (\bits x -> f x .|. bits) 0
-
-familyFromAddr :: S.SockAddr -> S.Family
-familyFromAddr addr = case addr of
-    S.SockAddrInet {}   -> S.AF_INET
-    S.SockAddrInet6 {}  -> S.AF_INET6
-    S.SockAddrUnix {}   -> S.AF_UNIX
-    S.SockAddrCan {}    -> S.AF_CAN
 
 nilValue :: ByteString
 nilValue = "-"
@@ -226,3 +292,7 @@ orNil = maybe nilValue
 sp :: ByteString -> ByteString -> ByteString
 sp b1 b2 = b1 <> " " <> b2
 {-# INLINE sp #-}
+
+-- see http://www.iana.org/assignments/protocol-numbers/protocol-numbers.txt
+udpProtocolNum :: CInt
+udpProtocolNum = 17

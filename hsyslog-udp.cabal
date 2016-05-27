@@ -19,7 +19,6 @@ library
 
   Build-Depends:        base >= 3 && < 5
                       , bytestring == 0.10.*
-                      , hostname == 1.*
                       , hsyslog == 3.*
                       , network == 2.6.*
                       , text == 1.2.*
