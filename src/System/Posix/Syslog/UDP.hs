@@ -38,6 +38,9 @@ module System.Posix.Syslog.UDP
   , udpSocketForAddr
   , maskedPriVal
   , syslogPacket
+    -- ** Miscellaneous utilities
+  , getHostName
+  , getProcessId
   ) where
 
 import Control.Exception (SomeException, catch)
@@ -164,9 +167,9 @@ syslogPacket
   :: FormatTime t
   => CInt                 -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@; construct via 'maskedPriVal'
   -> Maybe t              -- ^ time of message, converted to @<https://tools.ietf.org/html/rfc5424#section-6.2.3 TIMESTAMP>@
-  -> Maybe HostName       -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@
+  -> Maybe HostName       -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@; fetch via 'getHostName'
   -> Maybe AppName        -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
-  -> Maybe ProcessID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@
+  -> Maybe ProcessID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@; fetch via 'getProcessId'
   -> Maybe MessageID      -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.7 MSGID>@
   -> Maybe StructuredData -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.3 STRUCTURED-DATA>@ (unsupported)
   -> Text                 -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
@@ -191,6 +194,14 @@ syslogPacket priVal time hostName appName' processId messageId _ message =
     mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
+getHostName :: IO HostName
+getHostName = HostName . B.pack <$> H.getHostName
+
+getProcessId :: IO ProcessID
+getProcessId = do
+    (CPid pid) <- P.getProcessID
+    return . ProcessID . B.pack $ show pid
+
 -- internal functions
 
 bitsOrWith :: (Bits b, Num b) => (a -> b) -> [a] -> b
@@ -202,14 +213,6 @@ familyFromAddr addr = case addr of
     S.SockAddrInet6 {}  -> S.AF_INET6
     S.SockAddrUnix {}   -> S.AF_UNIX
     S.SockAddrCan {}    -> S.AF_CAN
-
-getHostName :: IO HostName
-getHostName = HostName . B.pack <$> H.getHostName
-
-getProcessId :: IO ProcessID
-getProcessId = do
-    (CPid pid) <- P.getProcessID
-    return . ProcessID . B.pack $ show pid
 
 nilValue :: ByteString
 nilValue = "-"
