@@ -35,7 +35,7 @@ module System.Posix.Syslog.UDP
   -- | Currently unsupported; a placeholder for future use.
   , StructuredData (..)
     -- * The easy Haskell API to syslog via UDP
-  , withSyslog
+  , initSyslogUdp
   , SyslogFn
   , SyslogConfig (..)
   , defaultConfig
@@ -105,42 +105,36 @@ data StructuredData
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.3 STRUCTURED-DATA>@
   -- (unsupported)
 
--- | Wrap an IO computation with the ability to log to syslog via UDP.
+-- | Return a function that logs to syslog via UDP.
 --
 -- > {-# LANGUAGE OverloadedStrings #-}
 -- >
 -- > import System.Posix.Syslog.UDP
 -- >
--- > main = withSyslog mySyslogConfig $
--- >   \syslog -> do
--- >     putStrLn "huhu"
--- >     syslog [USER] [Debug] "huhu"
+-- > main = do
+-- >   syslog <- initSyslogUdp defaultConfig
+-- >   putStrLn "huhu"
+-- >   syslog [USER] [Debug] "huhu"
 --
 -- This makes no assumptions about socket connection status or endpoint
 -- availability. Any errors while sending are silently ignored.
 
-withSyslog :: SyslogConfig -> (SyslogFn -> IO ()) -> IO ()
-withSyslog config f = S.withSocketsDo $ do
-    socket <- S.socket (S.addrFamily addr) S.Datagram udpProtocolNum
+initSyslogUdp :: SyslogConfig -> IO SyslogFn
+initSyslogUdp config = S.withSocketsDo $ do
+    socket <- S.socket (S.addrFamily $ address config) S.Datagram udpProtoNum
     hostName <- getHostName
     processId <- getProcessId
+    let send = flip (SB.sendTo socket) (S.addrAddress $ address config)
 
-    let send bytes = catch
-          (void . SB.sendTo socket bytes $ S.addrAddress addr)
-          (const $ return () :: SomeException -> IO ())
-
-    f $ \facilities priorities message ->
+    return $ \facilities priorities message ->
       case maskedPriVal (severityMask config) facilities priorities of
         Nothing -> return ()
         Just priVal -> do
           time <- getCurrentTime
-          send $ syslogPacket priVal (Just time) (Just hostName)
-            (Just $ appName config) (Just processId) Nothing Nothing
-            message
-  where
-    addr = udpEndpoint config
+          safely . send $ syslogPacket priVal (Just time) (Just hostName)
+            (Just $ appName config) (Just processId) Nothing Nothing message
 
--- | The type of function provided by 'withSyslog'.
+-- | The type of function returned by 'withSyslog'.
 
 type SyslogFn
   =  [L.Facility] -- ^ facilities to log to
@@ -155,7 +149,7 @@ data SyslogConfig = SyslogConfig
     -- ^ string appended to each log message
   , severityMask :: SeverityMask
     -- ^ whitelist of priorities of logs to send
-  , udpEndpoint :: S.AddrInfo
+  , address :: S.AddrInfo
     -- ^ where to send the syslog packets; find via 'getSyslogOnHost'
     -- or 'S.getAddrInfo'
   } deriving (Eq, Show)
@@ -168,7 +162,7 @@ defaultConfig =
     SyslogConfig
       { appName = AppName "hsyslog-udp"
       , severityMask = L.NoMask
-      , udpEndpoint = localhost
+      , address = localhost
       }
 
 -- | The default IPv4 address/port for syslog on a local machine. Provided for
@@ -180,7 +174,7 @@ localhost =
       { S.addrFlags = []
       , S.addrFamily = S.AF_INET
       , S.addrSocketType = S.Datagram
-      , S.addrProtocol = udpProtocolNum
+      , S.addrProtocol = udpProtoNum
       , S.addrAddress = S.SockAddrInet 514 16777343
       , S.addrCanonName = Nothing
       }
@@ -251,7 +245,7 @@ getSyslogOnHost hostname =
   where
     hints = S.defaultHints
         { S.addrSocketType = S.Datagram
-        , S.addrProtocol = udpProtocolNum
+        , S.addrProtocol = udpProtoNum
         }
 
 -- | Construct a @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@.
@@ -289,10 +283,13 @@ notEmpty bs = if B.null bs then nilValue else bs
 orNil :: (a -> ByteString) -> Maybe a -> ByteString
 orNil = maybe nilValue
 
+safely :: IO a -> IO ()
+safely f = catch (void f) (const $ return () :: SomeException -> IO ())
+
 sp :: ByteString -> ByteString -> ByteString
 sp b1 b2 = b1 <> " " <> b2
 {-# INLINE sp #-}
 
 -- see http://www.iana.org/assignments/protocol-numbers/protocol-numbers.txt
-udpProtocolNum :: CInt
-udpProtocolNum = 17
+udpProtoNum :: CInt
+udpProtoNum = 17

@@ -14,8 +14,8 @@ main = do
 
 logMessages :: IO ()
 logMessages =
-    withSyslog defaultConfig $ \syslog -> do
-      syslog (MessageID "general") [USER] [Debug] "hello thar!"
+    syslog <- initSyslogUdp defaultConfig
+    syslog [USER] [Debug] "hello thar!"
 
 runSpecs :: IO ()
 runSpecs =
