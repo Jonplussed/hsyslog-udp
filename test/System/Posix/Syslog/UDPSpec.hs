@@ -11,7 +11,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
   describe "syslogPacket" $ do
-    let (Just priVal) = maskedPriVal NoMask [USER] [Debug]
+    let (Just priVal) = maskedPriVal NoMask USER Debug
 
     it "uses the NILVALUE for Nothing values" $
       let
@@ -44,3 +44,13 @@ spec = do
         expected = "<15>1 2003-10-11T22:14:15.003Z - - - - - test log message"
       in
         result `shouldBe` expected
+
+  describe "maskedPriVal" $ do
+
+    it "returns a Just if priorities remain after masking" $
+      let result = maskedPriVal (UpTo Debug) LOCAL4 Notice
+      in result `shouldBe` Just (PriVal 165)
+
+    it "returns Nothing if all priorities are masked" $
+      let result = maskedPriVal (UpTo Info) USER Debug
+      in result `shouldBe` Nothing

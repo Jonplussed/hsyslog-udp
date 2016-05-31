@@ -7,4 +7,4 @@ packages:
 - '.'
 - location:
     git: https://github.com/ThoughtLeadr/hsyslog
-    commit: 0740ebc30fb66eec5f0c3879c1a320794eb1001a
+    commit: 76fb9e52b9cf77190ebb504e45a503d3e0327c67

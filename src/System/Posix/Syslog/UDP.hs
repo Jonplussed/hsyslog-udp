@@ -51,9 +51,8 @@ module System.Posix.Syslog.UDP
 
 import Control.Exception (SomeException, catch)
 import Control.Monad (void)
-import Data.Bits (Bits, (.&.), (.|.))
+import Data.Bits ((.&.))
 import Data.ByteString (ByteString)
-import Data.List (foldl')
 import Data.Monoid ((<>))
 import Data.Text (Text)
 import Data.Time.Clock (getCurrentTime)
@@ -114,7 +113,7 @@ data StructuredData
 -- > main = do
 -- >   syslog <- initSyslogUdp defaultConfig
 -- >   putStrLn "huhu"
--- >   syslog [USER] [Debug] "huhu"
+-- >   syslog USER Debug "huhu"
 --
 -- This makes no assumptions about socket connection status or endpoint
 -- availability. Any errors while sending are silently ignored.
@@ -126,8 +125,8 @@ initSyslogUdp config = S.withSocketsDo $ do
     processId <- getProcessId
     let send = flip (SB.sendTo socket) (S.addrAddress $ address config)
 
-    return $ \facilities priorities message ->
-      case maskedPriVal (severityMask config) facilities priorities of
+    return $ \facility severity message ->
+      case maskedPriVal (severityMask config) facility severity of
         Nothing -> return ()
         Just priVal -> do
           time <- getCurrentTime
@@ -137,9 +136,9 @@ initSyslogUdp config = S.withSocketsDo $ do
 -- | The type of function returned by 'withSyslog'.
 
 type SyslogFn
-  =  [L.Facility] -- ^ facilities to log to
-  -> [Severity]   -- ^ severities under which to log
-  -> Text         -- ^ message body
+  =  L.Facility -- ^ facility to log to
+  -> Severity   -- ^ severity under which to log
+  -> Text       -- ^ message body
   -> IO ()
 
 -- | Configuration options for connecting and logging to your syslog socket.
@@ -254,25 +253,19 @@ getSyslogOnHost hostname =
 
 maskedPriVal
   :: SeverityMask
-  -> [L.Facility]
-  -> [Severity]
+  -> L.Facility
+  -> Severity
   -> Maybe PriVal
--- this switching is required because the CInt representation of NoMask is 0
-maskedPriVal _ _ [] = Nothing
-maskedPriVal mask facs pris =
-    case mask of
-      L.NoMask -> Just . PriVal $ L._LOG_MAKEPRI facVal priVal
-      _ | masked == 0 -> Nothing
-      _ -> Just . PriVal $ L._LOG_MAKEPRI facVal masked
+-- switching required because the CInt representation of NoMask is 0
+maskedPriVal mask fac sev
+    | mask == L.NoMask  = prival
+    | remaining == 0    = Nothing
+    | otherwise         = prival
   where
-    facVal = bitsOrWith L.fromFacility facs
-    priVal = bitsOrWith L.fromPriority pris
-    masked = L.fromPriorityMask mask .&. priVal
+    prival = Just . PriVal $ L.makePri fac sev
+    remaining = L._LOG_MASK (L.fromPriority sev) .&. L.fromPriorityMask mask
 
 -- internal functions
-
-bitsOrWith :: (Bits b, Num b) => (a -> b) -> [a] -> b
-bitsOrWith f = foldl' (\bits x -> f x .|. bits) 0
 
 nilValue :: ByteString
 nilValue = "-"
