@@ -1,11 +1,10 @@
-{-# OPTIONS_GHC -F -pgmF hspec-discover #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module Spec (main) where
 
-import Test.Hspec (hspec)
-
 import qualified System.Posix.Syslog.UDPSpec as UDPSpec
-
 import System.Posix.Syslog.UDP
+import Test.Hspec
 
 main :: IO ()
 main = do
@@ -13,8 +12,8 @@ main = do
     runSpecs
 
 logMessages :: IO ()
-logMessages =
-    syslog <- initSyslogUdp defaultConfig
+logMessages = do
+    syslog <- defaultConfig >>= initSyslogUdp
     syslog USER Debug "hello thar!"
 
 runSpecs :: IO ()

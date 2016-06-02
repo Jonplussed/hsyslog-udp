@@ -43,9 +43,10 @@ module System.Posix.Syslog.UDP
     -- * Manually constructing and sending syslog UDP packets
   , syslogPacket
     -- ** Miscellaneous utilities
+  , findSyslogOnHost
+  , getAppName
   , getHostName
   , getProcessId
-  , getSyslogOnHost
   , maskedPriVal
   ) where
 
@@ -58,6 +59,7 @@ import Data.Text (Text)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (FormatTime, formatTime, defaultTimeLocale)
 import Foreign.C (CInt)
+import System.Environment (getProgName)
 import System.Posix.Types (CPid (..))
 
 import qualified Data.ByteString.Char8 as B
@@ -111,7 +113,7 @@ data StructuredData
 -- > import System.Posix.Syslog.UDP
 -- >
 -- > main = do
--- >   syslog <- initSyslogUdp defaultConfig
+-- >   syslog <- defaultConfig >>= initSyslogUdp
 -- >   putStrLn "huhu"
 -- >   syslog USER Debug "huhu"
 --
@@ -121,8 +123,6 @@ data StructuredData
 initSyslogUdp :: SyslogConfig -> IO SyslogFn
 initSyslogUdp config = S.withSocketsDo $ do
     socket <- S.socket (S.addrFamily $ address config) S.Datagram udpProtoNum
-    hostName <- getHostName
-    processId <- getProcessId
     let send = flip (SB.sendTo socket) (S.addrAddress $ address config)
 
     return $ \facility severity message ->
@@ -130,8 +130,9 @@ initSyslogUdp config = S.withSocketsDo $ do
         Nothing -> return ()
         Just priVal -> do
           time <- getCurrentTime
-          safely . send $ syslogPacket priVal (Just time) (Just hostName)
-            (Just $ appName config) (Just processId) Nothing Nothing message
+          safely . send $ syslogPacket priVal (Just time)
+            (Just $ hostName config) (Just $ appName config)
+            (Just $ processId config) Nothing Nothing message
 
 -- | The type of function returned by 'withSyslog'.
 
@@ -145,7 +146,11 @@ type SyslogFn
 
 data SyslogConfig = SyslogConfig
   { appName :: AppName
-    -- ^ string appended to each log message
+    -- ^ identifier appended to each log message
+  , hostName :: HostName
+    -- ^ identifies the sender of each log message
+  , processId :: ProcessID
+    -- ^ identifies the process generating each log message
   , severityMask :: SeverityMask
     -- ^ whitelist of priorities of logs to send
   , address :: S.AddrInfo
@@ -153,16 +158,17 @@ data SyslogConfig = SyslogConfig
     -- or 'S.getAddrInfo'
   } deriving (Eq, Show)
 
--- | A convenient default config, connecting to
+-- | A convenient default config for connecting to
 -- 'localhost'. Provided for development/testing purposes.
 
-defaultConfig :: SyslogConfig
+defaultConfig :: IO SyslogConfig
 defaultConfig =
     SyslogConfig
-      { appName = AppName "hsyslog-udp"
-      , severityMask = L.NoMask
-      , address = localhost
-      }
+      <$> getAppName
+      <*> getHostName
+      <*> getProcessId
+      <*> pure L.NoMask
+      <*> pure localhost
 
 -- | The default IPv4 address/port for syslog on a local machine. Provided for
 -- development/testing purposes.
@@ -207,13 +213,13 @@ syslogPacket
   -> Text
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
   -> ByteString
-syslogPacket priVal time hostName appName' processId messageId _ message =
+syslogPacket priVal time hostName' appName' processId' messageId _ message =
          formatPriVal priVal
     <>   version
     `sp` orNil mkTime time
-    `sp` orNil mkHost hostName
+    `sp` orNil mkHost hostName'
     `sp` orNil mkApp appName'
-    `sp` orNil mkProcId processId
+    `sp` orNil mkProcId processId'
     `sp` orNil mkMsgId messageId
     `sp` structData
     `sp` T.encodeUtf8 message
@@ -227,6 +233,9 @@ syslogPacket priVal time hostName appName' processId messageId _ message =
     mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
+getAppName :: IO AppName
+getAppName = AppName . B.pack <$> getProgName
+
 getHostName :: IO HostName
 getHostName = HostName . B.pack <$> BSD.getHostName
 
@@ -238,8 +247,8 @@ getProcessId = do
 -- | Return any syslog/UDP identified endpoints at the given hostname or IP
 -- address. You'll have to select from the results.
 
-getSyslogOnHost :: String -> IO [S.AddrInfo]
-getSyslogOnHost hostname =
+findSyslogOnHost :: String -> IO [S.AddrInfo]
+findSyslogOnHost hostname =
     S.getAddrInfo (Just hints) (Just hostname) (Just "syslog")
   where
     hints = S.defaultHints
