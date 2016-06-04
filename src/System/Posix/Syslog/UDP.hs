@@ -1,14 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
-  A convenient interface for logging to syslog via UDP.
+  Module      :  System.Posix.Syslog.UDP
+  Maintainer  :  jon@childr.es
+  Stability   :  provisional
+  Portability :  Posix
+
+  Log messages to syslog over a network and via UDP according to
+  <https://tools.ietf.org/html/rfc5424 RFC 5424>.
 
   The following features are currently missing (but may be provided in future
-  versions):
+  releases):
 
     * validation of string identifiers such as @APP-NAME@ or @MSGID@
     * support for @STRUCTURED-DATA@
-    * verification that a UDP packet was fully transmitted
 -}
 
 module System.Posix.Syslog.UDP
@@ -35,7 +40,7 @@ module System.Posix.Syslog.UDP
   -- | Currently unsupported; a placeholder for future use.
   , StructuredData (..)
     -- * The easy Haskell API to syslog via UDP
-  , initSyslogUdp
+  , initSyslog
   , SyslogFn
   , SyslogConfig (..)
   , defaultConfig
@@ -113,15 +118,15 @@ data StructuredData
 -- > import System.Posix.Syslog.UDP
 -- >
 -- > main = do
--- >   syslog <- defaultConfig >>= initSyslogUdp
+-- >   syslog <- defaultConfig >>= initSyslog
 -- >   putStrLn "huhu"
 -- >   syslog USER Debug "huhu"
 --
 -- This makes no assumptions about socket connection status or endpoint
 -- availability. Any errors while sending are silently ignored.
 
-initSyslogUdp :: SyslogConfig -> IO SyslogFn
-initSyslogUdp config = S.withSocketsDo $ do
+initSyslog :: SyslogConfig -> IO SyslogFn
+initSyslog config = S.withSocketsDo $ do
     socket <- S.socket (S.addrFamily $ address config) S.Datagram udpProtoNum
     let send = flip (SB.sendTo socket) (S.addrAddress $ address config)
 
@@ -158,8 +163,8 @@ data SyslogConfig = SyslogConfig
     -- or 'S.getAddrInfo'
   } deriving (Eq, Show)
 
--- | A convenient default config for connecting to
--- 'localhost'. Provided for development/testing purposes.
+-- | A convenient default config for connecting to 'localhost'. Provided for
+-- development/testing purposes.
 
 defaultConfig :: IO SyslogConfig
 defaultConfig =
@@ -233,17 +238,6 @@ syslogPacket priVal time hostName' appName' processId' messageId _ message =
     mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
-getAppName :: IO AppName
-getAppName = AppName . B.pack <$> getProgName
-
-getHostName :: IO HostName
-getHostName = HostName . B.pack <$> BSD.getHostName
-
-getProcessId :: IO ProcessID
-getProcessId = do
-    (CPid pid) <- P.getProcessID
-    return . ProcessID . B.pack $ show pid
-
 -- | Return any syslog/UDP identified endpoints at the given hostname or IP
 -- address. You'll have to select from the results.
 
@@ -256,6 +250,17 @@ findSyslogOnHost hostname =
         , S.addrProtocol = udpProtoNum
         }
 
+getAppName :: IO AppName
+getAppName = AppName . B.pack <$> getProgName
+
+getHostName :: IO HostName
+getHostName = HostName . B.pack <$> BSD.getHostName
+
+getProcessId :: IO ProcessID
+getProcessId = do
+    (CPid pid) <- P.getProcessID
+    return . ProcessID . B.pack $ show pid
+
 -- | Construct a @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@.
 -- 'Nothing' indicates that the severities are fully masked, and so no packet
 -- should be sent.
@@ -265,14 +270,13 @@ maskedPriVal
   -> L.Facility
   -> Severity
   -> Maybe PriVal
--- switching required because the CInt representation of NoMask is 0
 maskedPriVal mask fac sev
-    | mask == L.NoMask  = prival
-    | remaining == 0    = Nothing
-    | otherwise         = prival
+    | mask == L.NoMask = prival
+    | masked = Nothing
+    | otherwise = prival
   where
     prival = Just . PriVal $ L.makePri fac sev
-    remaining = L._LOG_MASK (L.fromPriority sev) .&. L.fromPriorityMask mask
+    masked = L._LOG_MASK (L.fromPriority sev) .&. L.fromPriorityMask mask == 0
 
 -- internal functions
 

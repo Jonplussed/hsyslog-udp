@@ -1,7 +1,9 @@
 name:                   hsyslog-udp
 version:                0.1.0.0
 synopsis:               Syslog via UDP in Haskell according to RFC 5424
-homepage:               https://github.com/Jonplussed/hsyslog-udp
+description:            Log messages to syslog over a network and via UDP according to <https://tools.ietf.org/html/rfc5424 RFC 5424>.
+homepage:               https://github.com/ThoughtLeadr/hsyslog-udp
+bug-reports:            https://github.com/ThoughtLeadr/hsyslog-udp/issues
 license:                BSD3
 license-file:           LICENSE
 author:                 Jon Childress
@@ -10,6 +12,10 @@ category:               System
 build-type:             Simple
 extra-source-files:     README.md
 cabal-version:          >= 1.10
+
+Source-Repository head
+  type:                 git
+  location:             git://github.com/ThoughtLeadr/hsyslog-udp.git
 
 library
   default-language:     Haskell2010

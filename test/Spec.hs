@@ -13,7 +13,7 @@ main = do
 
 logMessages :: IO ()
 logMessages = do
-    syslog <- defaultConfig >>= initSyslogUdp
+    syslog <- defaultConfig >>= initSyslog
     syslog USER Debug "hello thar!"
 
 runSpecs :: IO ()

@@ -3,7 +3,7 @@
 module System.Posix.Syslog.UDPSpec (spec) where
 
 import Data.Time.Clock (UTCTime)
-import Data.Time.Format (defaultTimeLocale, readTime)
+import Data.Time.Format (defaultTimeLocale, parseTimeM)
 
 import System.Posix.Syslog.UDP
 import Test.Hspec
@@ -39,8 +39,8 @@ spec = do
 
     it "correctly formats the time" $
       let
-        time = readTime defaultTimeLocale "%FT%X%QZ" "2003-10-11T22:14:15.003Z" :: UTCTime
-        result = syslogPacket priVal (Just time) Nothing Nothing Nothing Nothing Nothing "test log message"
+        time = parseTimeM True defaultTimeLocale "%FT%X%QZ" "2003-10-11T22:14:15.003Z" :: Maybe UTCTime
+        result = syslogPacket priVal time Nothing Nothing Nothing Nothing Nothing "test log message"
         expected = "<15>1 2003-10-11T22:14:15.003Z - - - - - test log message"
       in
         result `shouldBe` expected
