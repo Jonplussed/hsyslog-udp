@@ -150,15 +150,18 @@ type SyslogFn
 -- | Configuration options for connecting and logging to your syslog socket.
 
 data SyslogConfig = SyslogConfig
-  { appName :: AppName
-    -- ^ identifier appended to each log message
-  , hostName :: HostName
-    -- ^ identifies the sender of each log message
-  , processId :: ProcessID
-    -- ^ identifies the process generating each log message
-  , severityMask :: SeverityMask
+  { appName :: !AppName
+    -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@;
+    -- fetch via 'getAppName'
+  , hostName :: !HostName
+    -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@;
+    -- fetch via 'getHostName'
+  , processId :: !ProcessID
+    -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@;
+    -- fetch via 'getProcessId'
+  , severityMask :: !SeverityMask
     -- ^ whitelist of priorities of logs to send
-  , address :: S.AddrInfo
+  , address :: !S.AddrInfo
     -- ^ where to send the syslog packets; find via 'getSyslogOnHost'
     -- or 'S.getAddrInfo'
   } deriving (Eq, Show)
@@ -206,7 +209,8 @@ syslogPacket
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.4 HOSTNAME>@;
   -- fetch via 'getHostName'
   -> Maybe AppName
-  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
+  -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@;
+  -- fetch via 'getAppName'
   -> Maybe ProcessID
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.6 PROCID>@;
   -- fetch via 'getProcessId'
