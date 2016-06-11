@@ -55,7 +55,7 @@ module System.Posix.Syslog.UDP
   , rfc5424packet
   , rfc3164packet
     -- ** Miscellaneous utilities
-  , findSyslogOnHost
+  , resolveUdpAddress
   , getAppName
   , getHostName
   , getProcessId
@@ -177,7 +177,7 @@ data SyslogConfig = SyslogConfig
   , severityMask :: !SeverityMask
     -- ^ whitelist of priorities of logs to send
   , address :: !S.AddrInfo
-    -- ^ where to send the syslog packets; construct via 'resolveAddress' or
+    -- ^ where to send the syslog packets; construct via 'resolveUdpAddress' or
     -- find via 'S.getAddrInfo'
   , protocol :: Protocol
     -- ^ protocol for formatting the message, such as 'rfc5424protocol' or
@@ -300,6 +300,25 @@ rfc3164packet priVal time hostName' message =
 rfc3164protocol :: Protocol
 rfc3164protocol priVal time hostName' _ _ message =
     rfc3164packet priVal time hostName' message
+
+-- | Obtain an IPv4 'S.AddrInfo' for your 'SyslogConfig' from a hostname
+-- (or IPv4 address) and port. Sets the address protocol to 'S.Datagram'.
+
+resolveUdpAddress :: Integral n => String -> n -> IO (Maybe S.AddrInfo)
+resolveUdpAddress name port = do
+    host <- BSD.getHostByName name
+    return $ case BSD.hostAddresses host of
+      (h:_) ->
+        Just S.AddrInfo
+          { S.addrFlags = []
+          , S.addrFamily = BSD.hostFamily host
+          , S.addrSocketType = S.Datagram
+          , S.addrProtocol = udpProtoNum
+          , S.addrAddress = S.SockAddrInet (fromIntegral port) h
+          , S.addrCanonName = Nothing
+          }
+      _ ->
+        Nothing
 
 getAppName :: IO AppName
 getAppName = AppName . B.pack <$> getProgName
