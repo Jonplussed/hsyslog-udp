@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 {- |
   Module      :  System.Posix.Syslog.UDP
@@ -6,19 +7,20 @@
   Stability   :  provisional
   Portability :  Posix
 
-  Log messages to syslog over a network and via UDP according to
-  <https://tools.ietf.org/html/rfc5424 RFC 5424>.
+  Log messages to syslog over a network via UDP, with protocols such as
+  <https://tools.ietf.org/html/rfc5424 RFC 5424> or
+  <https://tools.ietf.org/html/rfc3164 RFC 3164>.
 
   The following features are currently missing (but may be provided in future
   releases):
 
     * validation of string identifiers such as @APP-NAME@ or @MSGID@
-    * support for @STRUCTURED-DATA@
+    * support for @STRUCTURED-DATA@ (RFC 5424 only)
 -}
 
 module System.Posix.Syslog.UDP
   ( -- * Syslog UDP packet component datatypes
-    -- ** Re-exports from hsyslog
+    -- ** Re-exports from <http://hackage.haskell.org/package/hsyslog hsyslog>
     L.Priority (..)
   , L.Facility (..)
   , L.PriorityMask (..)
@@ -45,8 +47,13 @@ module System.Posix.Syslog.UDP
   , SyslogConfig (..)
   , defaultConfig
   , localhost
-    -- * Manually constructing and sending syslog UDP packets
-  , syslogPacket
+    -- ** Common protocols for use with 'SyslogConfig'
+  , Protocol
+  , rfc5424protocol
+  , rfc3164protocol
+    -- * Manually constructing syslog UDP packets
+  , rfc5424packet
+  , rfc3164packet
     -- ** Miscellaneous utilities
   , findSyslogOnHost
   , getAppName
@@ -61,7 +68,7 @@ import Data.Bits ((.&.))
 import Data.ByteString (ByteString)
 import Data.Monoid ((<>))
 import Data.Text (Text)
-import Data.Time.Clock (getCurrentTime)
+import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Format (FormatTime, formatTime, defaultTimeLocale)
 import Foreign.C (CInt)
 import System.Environment (getProgName)
@@ -77,6 +84,15 @@ import qualified System.Posix.Syslog as L
 
 type Severity = L.Priority
 type SeverityMask = L.PriorityMask
+
+type Protocol
+  =  PriVal
+  -> UTCTime
+  -> HostName
+  -> AppName
+  -> ProcessID
+  -> Text
+  -> ByteString
 
 newtype AppName
   = AppName ByteString
@@ -135,9 +151,8 @@ initSyslog config = S.withSocketsDo $ do
         Nothing -> return ()
         Just priVal -> do
           time <- getCurrentTime
-          safely . send $ syslogPacket priVal (Just time)
-            (Just $ hostName config) (Just $ appName config)
-            (Just $ processId config) Nothing Nothing message
+          safely . send $ (protocol config) priVal time (hostName config)
+            (appName config) (processId config) message
 
 -- | The type of function returned by 'withSyslog'.
 
@@ -162,21 +177,26 @@ data SyslogConfig = SyslogConfig
   , severityMask :: !SeverityMask
     -- ^ whitelist of priorities of logs to send
   , address :: !S.AddrInfo
-    -- ^ where to send the syslog packets; find via 'getSyslogOnHost'
-    -- or 'S.getAddrInfo'
-  } deriving (Eq, Show)
+    -- ^ where to send the syslog packets; construct via 'resolveAddress' or
+    -- find via 'S.getAddrInfo'
+  , protocol :: Protocol
+    -- ^ protocol for formatting the message, such as 'rfc5424protocol' or
+    -- 'rfc3164protocol'
+  }
 
 -- | A convenient default config for connecting to 'localhost'. Provided for
 -- development/testing purposes.
 
 defaultConfig :: IO SyslogConfig
-defaultConfig =
-    SyslogConfig
-      <$> getAppName
-      <*> getHostName
-      <*> getProcessId
-      <*> pure L.NoMask
-      <*> pure localhost
+defaultConfig = do
+    appName <- getAppName
+    hostName <- getHostName
+    processId <- getProcessId
+    return SyslogConfig {..}
+  where
+    severityMask = L.NoMask
+    address = localhost
+    protocol = rfc3164protocol
 
 -- | The default IPv4 address/port for syslog on a local machine. Provided for
 -- development/testing purposes.
@@ -197,7 +217,7 @@ localhost =
 -- packet are whitespace-delineated, so don't allow whitespace in anything but
 -- the log message!
 
-syslogPacket
+rfc5424packet
   :: FormatTime t
   => PriVal
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@;
@@ -222,9 +242,9 @@ syslogPacket
   -> Text
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
   -> ByteString
-syslogPacket priVal time hostName' appName' processId' messageId _ message =
+rfc5424packet priVal time hostName' appName' processId' messageId _ message =
          formatPriVal priVal
-    <>   version
+     <>  version
     `sp` orNil mkTime time
     `sp` orNil mkHost hostName'
     `sp` orNil mkApp appName'
@@ -242,17 +262,44 @@ syslogPacket priVal time hostName' appName' processId' messageId _ message =
     mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
--- | Return any syslog/UDP identified endpoints at the given hostname or IP
--- address. You'll have to select from the results.
+rfc5424protocol :: Protocol
+rfc5424protocol priVal time hostName' appName' processId' message =
+    rfc5424packet priVal (Just time) (Just hostName') (Just appName')
+      (Just processId') Nothing Nothing message
 
-findSyslogOnHost :: String -> IO [S.AddrInfo]
-findSyslogOnHost hostname =
-    S.getAddrInfo (Just hints) (Just hostname) (Just "syslog")
+-- | Construct a syslog UDP packet as dictated by
+-- <https://tools.ietf.org/html/rfc3164 RFC 3164>. Note that fields in a syslog
+-- packet are whitespace-delineated, so don't allow whitespace in anything but
+-- the log message!
+
+rfc3164packet
+  :: FormatTime t
+  => PriVal
+  -- ^ see @<https://tools.ietf.org/html/rfc3164#section-4.1.1 PRI>@;
+  -- construct via 'maskedPriVal'
+  -> t
+  -- ^ time of message, converted to @TIMESTAMP@ in
+  -- @<https://tools.ietf.org/html/rfc3164#section-4.1.2 HEADER>@
+  -> HostName
+  -- ^ the @HOSTNAME@ of the
+  -- @<https://tools.ietf.org/html/rfc3164#section-4.1.2 HEADER>@;
+  -- fetch via 'getHostName'
+  -> Text
+  -- ^ see @<https://tools.ietf.org/html/rfc3164#section-4.1.3 MSG>@
+  -> ByteString
+rfc3164packet priVal time hostName' message =
+         formatPriVal priVal
+     <>  mkTime time
+    `sp` mkHost hostName'
+    `sp` T.encodeUtf8 message
   where
-    hints = S.defaultHints
-        { S.addrSocketType = S.Datagram
-        , S.addrProtocol = udpProtoNum
-        }
+    formatPriVal (PriVal x) = "<" <> B.pack (show x) <> ">"
+    mkTime = B.pack . formatTime defaultTimeLocale "%b %e %X"
+    mkHost (HostName x) = notEmpty x
+
+rfc3164protocol :: Protocol
+rfc3164protocol priVal time hostName' _ _ message =
+    rfc3164packet priVal time hostName' message
 
 getAppName :: IO AppName
 getAppName = AppName . B.pack <$> getProgName

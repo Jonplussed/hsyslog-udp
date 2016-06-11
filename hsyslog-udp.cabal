@@ -1,7 +1,9 @@
 name:                   hsyslog-udp
 version:                0.1.0.0
-synopsis:               Syslog via UDP in Haskell according to RFC 5424
-description:            Log messages to syslog over a network and via UDP according to <https://tools.ietf.org/html/rfc5424 RFC 5424>.
+synopsis:               Log to syslog over a network via UDP
+description:            Supports <https://tools.ietf.org/html/rfc5424 RFC 5424>,
+                        <https://tools.ietf.org/html/rfc3164 RFC 3164>, or any
+                        arbitrary protocol.
 homepage:               https://github.com/ThoughtLeadr/hsyslog-udp
 bug-reports:            https://github.com/ThoughtLeadr/hsyslog-udp/issues
 license:                BSD3
