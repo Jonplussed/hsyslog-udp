@@ -49,17 +49,20 @@ module System.Posix.Syslog.UDP
   , localhost
     -- ** Common protocols for use with 'SyslogConfig'
   , Protocol
-  , rfc5424protocol
-  , rfc3164protocol
+  , rfc5424Protocol
+  , rfc3164Protocol
+  , rsyslogProtocol
     -- * Manually constructing syslog UDP packets
-  , rfc5424packet
-  , rfc3164packet
+  , rfc5424Packet
+  , rfc3164Packet
+  , rsyslogPacket
     -- ** Miscellaneous utilities
-  , resolveUdpAddress
   , getAppName
   , getHostName
   , getProcessId
   , maskedPriVal
+  , resolveUdpAddress
+  , rfc3339Timestamp
   ) where
 
 import Control.Exception (SomeException, catch)
@@ -154,7 +157,7 @@ initSyslog config = S.withSocketsDo $ do
           safely . send $ (protocol config) priVal time (hostName config)
             (appName config) (processId config) message
 
--- | The type of function returned by 'withSyslog'.
+-- | The type of function returned by 'initSyslog'.
 
 type SyslogFn
   =  L.Facility -- ^ facility to log to
@@ -180,8 +183,8 @@ data SyslogConfig = SyslogConfig
     -- ^ where to send the syslog packets; construct via 'resolveUdpAddress' or
     -- find via 'S.getAddrInfo'
   , protocol :: Protocol
-    -- ^ protocol for formatting the message, such as 'rfc5424protocol' or
-    -- 'rfc3164protocol'
+    -- ^ protocol for formatting the message, such as 'rfc5424Protocol' or
+    -- 'rfc3164Protocol'
   }
 
 -- | A convenient default config for connecting to 'localhost'. Provided for
@@ -196,7 +199,7 @@ defaultConfig = do
   where
     severityMask = L.NoMask
     address = localhost
-    protocol = rfc3164protocol
+    protocol = rfc3164Protocol
 
 -- | The default IPv4 address/port for syslog on a local machine. Provided for
 -- development/testing purposes.
@@ -217,7 +220,7 @@ localhost =
 -- packet are whitespace-delineated, so don't allow whitespace in anything but
 -- the log message!
 
-rfc5424packet
+rfc5424Packet
   :: FormatTime t
   => PriVal
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@;
@@ -242,7 +245,7 @@ rfc5424packet
   -> Text
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
   -> ByteString
-rfc5424packet priVal time hostName' appName' processId' messageId _ message =
+rfc5424Packet priVal time hostName' appName' processId' messageId _ message =
          formatPriVal priVal
      <>  version
     `sp` orNil mkTime time
@@ -253,18 +256,17 @@ rfc5424packet priVal time hostName' appName' processId' messageId _ message =
     `sp` structData
     `sp` T.encodeUtf8 message
   where
-    formatPriVal (PriVal x) = "<" <> B.pack (show x) <> ">"
     version = "1"
-    mkTime = B.pack . formatTime defaultTimeLocale "%FT%X%QZ"
+    mkTime = rfc3339Timestamp
     mkHost (HostName x) = notEmpty x
     mkApp (AppName x) = notEmpty x
     mkProcId (ProcessID x) = notEmpty x
     mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
-rfc5424protocol :: Protocol
-rfc5424protocol priVal time hostName' appName' processId' message =
-    rfc5424packet priVal (Just time) (Just hostName') (Just appName')
+rfc5424Protocol :: Protocol
+rfc5424Protocol priVal time hostName' appName' processId' message =
+    rfc5424Packet priVal (Just time) (Just hostName') (Just appName')
       (Just processId') Nothing Nothing message
 
 -- | Construct a syslog UDP packet as dictated by
@@ -272,7 +274,7 @@ rfc5424protocol priVal time hostName' appName' processId' message =
 -- packet are whitespace-delineated, so don't allow whitespace in anything but
 -- the log message!
 
-rfc3164packet
+rfc3164Packet
   :: FormatTime t
   => PriVal
   -- ^ see @<https://tools.ietf.org/html/rfc3164#section-4.1.1 PRI>@;
@@ -284,22 +286,48 @@ rfc3164packet
   -- ^ the @HOSTNAME@ of the
   -- @<https://tools.ietf.org/html/rfc3164#section-4.1.2 HEADER>@;
   -- fetch via 'getHostName'
+  -> AppName
+  -- ^ the program name in the @TAG@ portion of the
+  -- @<https://tools.ietf.org/html/rfc3164#section-4.1.3 MSG>@; fetch via
+  -- 'getAppName'
+  -> ProcessID
+  -- ^ the process identifier in the @TAG@ portion of the
+  -- @<https://tools.ietf.org/html/rfc3164#section-4.1.3 MSG>@; fetch via
+  -- 'getProcessId'
   -> Text
-  -- ^ see @<https://tools.ietf.org/html/rfc3164#section-4.1.3 MSG>@
+  -- ^ the @CONTENT@ portion of the
+  -- @<https://tools.ietf.org/html/rfc3164#section-4.1.3 MSG>@
   -> ByteString
-rfc3164packet priVal time hostName' message =
-         formatPriVal priVal
-     <>  mkTime time
-    `sp` mkHost hostName'
-    `sp` T.encodeUtf8 message
+rfc3164Packet = rfc3164Variant timeFormat
   where
-    formatPriVal (PriVal x) = "<" <> B.pack (show x) <> ">"
-    mkTime = B.pack . formatTime defaultTimeLocale "%b %e %X"
-    mkHost (HostName x) = notEmpty x
+    timeFormat = B.pack . formatTime defaultTimeLocale "%b %e %X"
 
-rfc3164protocol :: Protocol
-rfc3164protocol priVal time hostName' _ _ message =
-    rfc3164packet priVal time hostName' message
+rfc3164Protocol :: Protocol
+rfc3164Protocol = rfc3164Packet
+
+-- | Recommended rsyslog template
+-- @<http://www.rsyslog.com/doc/v8-stable/configuration/templates.html RSYSLOG_ForwardFormat>@.
+-- Same fields as RFC 3164, but with an RFC 3339 high-precision timestamp.
+
+rsyslogPacket
+  :: FormatTime t
+  => PriVal
+  -> t
+  -> HostName
+  -> AppName
+  -> ProcessID
+  -> Text
+  -> ByteString
+rsyslogPacket = rfc3164Variant rfc3339Timestamp
+
+rsyslogProtocol :: Protocol
+rsyslogProtocol = rsyslogPacket
+
+-- | An <https://tools.ietf.org/html/rfc3339 RFC 3339> high-precision
+-- timestamp.
+
+rfc3339Timestamp :: FormatTime t => t -> ByteString
+rfc3339Timestamp = B.pack . formatTime defaultTimeLocale "%FT%X%QZ"
 
 -- | Obtain an IPv4 'S.AddrInfo' for your 'SyslogConfig' from a hostname
 -- (or IPv4 address) and port. Sets the address protocol to 'S.Datagram'.
@@ -350,6 +378,9 @@ maskedPriVal mask fac sev
 
 -- internal functions
 
+formatPriVal :: PriVal -> ByteString
+formatPriVal (PriVal x) = "<" <> B.pack (show x) <> ">"
+
 nilValue :: ByteString
 nilValue = "-"
 
@@ -358,6 +389,25 @@ notEmpty bs = if B.null bs then nilValue else bs
 
 orNil :: (a -> ByteString) -> Maybe a -> ByteString
 orNil = maybe nilValue
+
+rfc3164Variant
+  :: (t -> ByteString)
+  -> PriVal
+  -> t
+  -> HostName
+  -> AppName
+  -> ProcessID
+  -> Text
+  -> ByteString
+rfc3164Variant timeFormat priVal time hostName' appName' processId' message =
+         formatPriVal priVal
+     <>  timeFormat time
+    `sp` mkHost hostName'
+    `sp` mkTag appName' processId'
+    `sp` T.encodeUtf8 message
+  where
+    mkHost (HostName x) = notEmpty x
+    mkTag (AppName name) (ProcessID procId) = name <> "[" <> procId <> "]:"
 
 safely :: IO a -> IO ()
 safely f = catch (void f) (const $ return () :: SomeException -> IO ())
