@@ -30,7 +30,7 @@ library
                       , hsyslog == 4.*
                       , network == 2.6.*
                       , text == 1.2.*
-                      , time == 1.5.*
+                      , time < 1.7
                       , unix == 2.7.*
 
 test-suite specs
@@ -43,4 +43,4 @@ test-suite specs
   Build-Depends:        base >= 3 && < 5
                       , hspec == 2.2.*
                       , hsyslog-udp == 0.1.1
-                      , time == 1.5.*
+                      , time < 1.7
