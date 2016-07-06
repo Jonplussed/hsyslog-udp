@@ -1,5 +1,5 @@
 name:                   hsyslog-udp
-version:                0.1.1
+version:                0.1.2
 synopsis:               Log to syslog over a network via UDP
 description:            Supports <https://tools.ietf.org/html/rfc5424 RFC 5424>,
                         <https://tools.ietf.org/html/rfc3164 RFC 3164>, or any
@@ -42,5 +42,5 @@ test-suite specs
 
   Build-Depends:        base >= 3 && < 5
                       , hspec == 2.2.*
-                      , hsyslog-udp == 0.1.1
+                      , hsyslog-udp
                       , time < 1.7
