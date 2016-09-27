@@ -166,15 +166,18 @@ data StructuredData
 -- > import System.Posix.Syslog.UDP
 -- >
 -- > main = do
--- >   syslog <- defaultConfig >>= initSyslog
+-- >   syslog <- defaultConfig >>= initSyslog rfc5424Protocol
 -- >   putStrLn "huhu"
 -- >   syslog USER Debug "huhu"
 --
 -- This makes no assumptions about socket connection status or endpoint
 -- availability. Any errors while sending are silently ignored.
 
-initSyslog :: SyslogConfig -> IO SyslogFn
-initSyslog config = S.withSocketsDo $ do
+initSyslog
+  :: Protocol
+  -> SyslogConfig
+  -> IO SyslogFn
+initSyslog protocol config = S.withSocketsDo $ do
     socket <- S.socket (S.addrFamily $ address config) S.Datagram udpProtoNum
     let send = flip (SB.sendTo socket) (S.addrAddress $ address config)
 
@@ -183,7 +186,7 @@ initSyslog config = S.withSocketsDo $ do
         Nothing -> return ()
         Just priVal -> do
           time <- getCurrentTime
-          safely . send $ (protocol config) priVal time (hostName config)
+          safely . send $ protocol priVal time (hostName config)
             (appName config) (processId config) message
 
 -- | The type of function returned by 'initSyslog'.
@@ -211,9 +214,6 @@ data SyslogConfig = SyslogConfig
   , address :: !S.AddrInfo
     -- ^ where to send the syslog packets; construct via 'resolveUdpAddress' or
     -- find via 'S.getAddrInfo'
-  , protocol :: Protocol
-    -- ^ protocol for formatting the message, such as 'rfc5424Protocol' or
-    -- 'rfc3164Protocol'
   }
 
 -- | A convenient default config for connecting to 'localhost'. Provided for
@@ -228,7 +228,6 @@ defaultConfig = do
   where
     severityMask = L.NoMask
     address = localhost
-    protocol = rfc3164Protocol
 
 -- | The default IPv4 address/port for syslog on a local machine. Provided for
 -- development/testing purposes.

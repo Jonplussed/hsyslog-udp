@@ -13,7 +13,7 @@ main = do
 
 logMessages :: IO ()
 logMessages = do
-    syslog <- defaultConfig >>= initSyslog
+    syslog <- defaultConfig >>= initSyslog rfc5424Protocol
     syslog USER Debug "hello thar!"
 
 runSpecs :: IO ()
