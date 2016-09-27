@@ -97,10 +97,27 @@ type Protocol
   -> Text
   -> ByteString
 
+class ToLogValue a where
+  toLogValue :: a -> ByteString
+
+instance ToLogValue ByteString where
+  toLogValue bs | B.null bs = nilValue
+  toLogValue bs = bs
+
+instance ToLogValue Text where
+  toLogValue = toLogValue . T.encodeUtf8
+
+instance ToLogValue a => ToLogValue (Maybe a) where
+  toLogValue Nothing = nilValue
+  toLogValue (Just x) = toLogValue x
+
 newtype AppName
   = AppName ByteString
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.5 APP-NAME>@
   deriving (Eq, Show)
+
+instance ToLogValue AppName where
+  toLogValue (AppName x) = toLogValue x
 
 newtype HostName
   = HostName ByteString
@@ -108,11 +125,17 @@ newtype HostName
   -- fetch via 'getHostName'
   deriving (Eq, Show)
 
+instance ToLogValue HostName where
+  toLogValue (HostName x) = toLogValue x
+
 newtype PriVal
   = PriVal CInt
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.1 PRI>@;
   -- construct via 'maskedPriVal'
   deriving (Eq, Show)
+
+instance ToLogValue PriVal where
+  toLogValue = formatPriVal
 
 newtype ProcessID
   = ProcessID ByteString
@@ -120,10 +143,16 @@ newtype ProcessID
   -- fetch via 'getProcessId'
   deriving (Eq, Show)
 
+instance ToLogValue ProcessID where
+  toLogValue (ProcessID x) = toLogValue x
+
 newtype MessageID
   = MessageID ByteString
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.2.7 MSGID>@
   deriving (Eq, Show)
+
+instance ToLogValue MessageID where
+  toLogValue (MessageID x) = toLogValue x
 
 data StructuredData
   = StructuredData
@@ -246,22 +275,17 @@ rfc5424Packet
   -- ^ see @<https://tools.ietf.org/html/rfc5424#section-6.4 MSG>@
   -> ByteString
 rfc5424Packet priVal time hostName' appName' processId' messageId _ message =
-         formatPriVal priVal
+         toLogValue priVal
      <>  version
-    `sp` orNil mkTime time
-    `sp` orNil mkHost hostName'
-    `sp` orNil mkApp appName'
-    `sp` orNil mkProcId processId'
-    `sp` orNil mkMsgId messageId
+    `sp` maybe nilValue rfc3339Timestamp time
+    `sp` toLogValue hostName'
+    `sp` toLogValue appName'
+    `sp` toLogValue processId'
+    `sp` toLogValue messageId
     `sp` structData
-    `sp` T.encodeUtf8 message
+    `sp` toLogValue message
   where
     version = "1"
-    mkTime = rfc3339Timestamp
-    mkHost (HostName x) = notEmpty x
-    mkApp (AppName x) = notEmpty x
-    mkProcId (ProcessID x) = notEmpty x
-    mkMsgId (MessageID x) = notEmpty x
     structData = nilValue
 
 rfc5424Protocol :: Protocol
@@ -384,12 +408,6 @@ formatPriVal (PriVal x) = "<" <> B.pack (show x) <> ">"
 nilValue :: ByteString
 nilValue = "-"
 
-notEmpty :: ByteString -> ByteString
-notEmpty bs = if B.null bs then nilValue else bs
-
-orNil :: (a -> ByteString) -> Maybe a -> ByteString
-orNil = maybe nilValue
-
 rfc3164Variant
   :: (t -> ByteString)
   -> PriVal
@@ -400,13 +418,12 @@ rfc3164Variant
   -> Text
   -> ByteString
 rfc3164Variant timeFormat priVal time hostName' appName' processId' message =
-         formatPriVal priVal
+         toLogValue priVal
      <>  timeFormat time
-    `sp` mkHost hostName'
+    `sp` toLogValue hostName'
     `sp` mkTag appName' processId'
-    `sp` T.encodeUtf8 message
+    `sp` toLogValue message
   where
-    mkHost (HostName x) = notEmpty x
     mkTag (AppName name) (ProcessID procId) = name <> "[" <> procId <> "]:"
 
 safely :: IO a -> IO ()
